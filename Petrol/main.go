@@ -142,9 +142,9 @@ func main() {
 	}
 	go stationQueue()
 	// Sleep to allow for all cars to arrive
-	time.Sleep(1 * time.Second)
+	time.Sleep(1 * time.Millisecond)
 	wgArrival.Wait()
-	wg.Wait()
+	//wg.Wait()
 }
 
 func stationQueue() {
@@ -155,8 +155,22 @@ func stationQueue() {
 	for i := 0; i < carNum; i++ {
 		go carRoutine(Car{ID: i, Fuel: genFuelType()})
 		stagger := time.Duration(rand.Intn(staggerMax-staggerMin) + staggerMin)
-		time.Sleep(stagger * time.Second)
+		time.Sleep(stagger * time.Millisecond)
 	}
+
+	wg.Wait()
+	close(processedCars)
+	// Aggregate results
+	var totalQueueTime, totalRefuelTime, totalPaymentTime, totalTime int
+	var numCars int
+	for routineStat := range processedCars {
+		totalQueueTime += routineStat.queueTime
+		totalRefuelTime += routineStat.fuelTime
+		totalPaymentTime += routineStat.serveTime
+		totalTime += routineStat.queueTime + routineStat.fuelTime + routineStat.serveTime
+		numCars++
+	}
+	fmt.Printf("Queue: %d \n Refuel: %d \n Payment: %d \n Total: %d \n Car amount: %d \n", totalQueueTime, totalRefuelTime, totalPaymentTime, totalTime, numCars)
 }
 
 func carRoutine(car Car) {
@@ -185,10 +199,10 @@ func carRoutine(car Car) {
 		refuelTime = time.Duration(rand.Intn(gasMaxT-gasMinT) + gasMinT)
 	}
 	<-currentStand
-	queueT := int(time.Since(startQueueT).Seconds())
+	queueT := int(time.Since(startQueueT).Milliseconds())
 	// Refueling
-	time.Sleep(refuelTime * time.Second)
-	fuelTime := int(refuelTime.Seconds())
+	time.Sleep(refuelTime * time.Millisecond)
+	fuelTime := refuelTime
 	// Attends cash register
 	<-availableCashRegister
 	payTime := payForFuel()
@@ -196,9 +210,9 @@ func carRoutine(car Car) {
 	availableCashRegister <- 1
 	currentStand <- 1
 	// Prints car info
-	totalTime := int(time.Since(startQueueT).Seconds())
-	fmt.Printf("A %s Car number %d waited %d refueled in %d seconds and paid in %d seconds for a total of % d seconds\n", car.Fuel, car.ID, queueT, refuelTime, payTime, totalTime)
-	processedCars <- carStats{fuel: car.Fuel, queueTime: queueT, fuelTime: fuelTime, serveTime: payTime}
+	//totalTime := int(time.Since(startQueueT).Milliseconds())
+	//fmt.Printf("A %s Car number %d waited %d refueled in %d seconds and paid in %d seconds for a total of % d seconds\n", car.Fuel, car.ID, queueT, refuelTime, payTime, totalTime)
+	processedCars <- carStats{fuel: car.Fuel, queueTime: queueT, fuelTime: int(fuelTime), serveTime: payTime}
 }
 
 // genFuelType returns a random fuel type.
@@ -210,7 +224,7 @@ func genFuelType() FuelType {
 
 func payForFuel() int {
 	randomNumber := rand.Intn(maxPayment-minPayment) + minPayment
-	randTime := time.Duration(randomNumber) * time.Second
+	randTime := time.Duration(randomNumber) * time.Millisecond
 	time.Sleep(randTime)
 	return randomNumber
 }
