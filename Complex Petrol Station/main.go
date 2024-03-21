@@ -23,13 +23,16 @@ const (
 
 // Car represents a car arriving at the gas station
 type Car struct {
-	ID         int
-	Fuel       FuelType
-	QueueEnter time.Time
-	QueueTime  time.Duration
-	FuelTime   time.Duration
-	PayTime    time.Duration
-	carSync    *sync.WaitGroup
+	ID                 int
+	Fuel               FuelType
+	StandQueueEnter    time.Time
+	RegisterQueueEnter time.Time
+	StandQueueTime     time.Duration
+	RegisterQueueTime  time.Duration
+	FuelTime           time.Duration
+	PayTime            time.Duration
+	TotalTime          time.Duration
+	carSync            *sync.WaitGroup
 }
 
 // FuelStand describes a specific stand at the station
@@ -42,12 +45,10 @@ type FuelStand struct {
 // CashRegister represents a cash register for payment
 type CashRegister struct {
 	Id    int
-	Queue chan *sync.WaitGroup
+	Queue chan *Car
 }
 
-var Exit = make(chan *Car)
-
-func prepare() {
+func loadEnvFile() {
 	err := godotenv.Load("setup.env")
 
 	if err != nil {
@@ -78,6 +79,8 @@ func prepare() {
 	numRegisters = loadIntEnvVariable("REGISTER_COUNT")
 	minPaymentT = loadIntEnvVariable("REGISTER_HANDLE_TIME_MIN")
 	maxPaymentT = loadIntEnvVariable("REGISTER_HANDLE_TIME_MAX")
+	standBuffer = loadIntEnvVariable("STAND_BUFFER")
+	registerBuffer = loadIntEnvVariable("REGISTER_BUFFER")
 }
 
 func loadIntEnvVariable(key string) int {
@@ -103,8 +106,12 @@ var numElectric = 1
 // register numbers
 var numRegisters = 2
 
+// channels
+var buildingQueue = make(chan *Car, 10)
+var Exit = make(chan *Car)
+
 func main() {
-	prepare()
+	loadEnvFile()
 	// Creating fuel stands
 	var stands []*FuelStand
 	standCount := 0
@@ -123,20 +130,16 @@ func main() {
 		stands = append(stands, newFuelStand(standCount, LPG, standBuffer))
 		standCount++
 	}
-	//standWaiter.Add(len(stands))
 	// adding electric stands
 	for i := 0; i < numElectric; i++ {
 		stands = append(stands, newFuelStand(standCount, Electric, standBuffer))
 		standCount++
 	}
-	fmt.Printf("Stands: %d \n", standCount)
 	// Creating registers
-	//numRegisters = 4
 	var registers []*CashRegister
 	for i := 0; i < numRegisters; i++ {
 		registers = append(registers, newCashRegister(i, registerBuffer))
 	}
-	fmt.Printf("Registers %d \n", numRegisters)
 	end.Add(1)
 	// Car creation routine
 	go createCarsRoutine()
@@ -155,8 +158,6 @@ func main() {
 	// Aggregation routine
 	go aggregationRoutine()
 
-	//waitArrival.Wait()
-
 	standWaiter.Wait()
 	close(buildingQueue)
 
@@ -168,25 +169,21 @@ func main() {
 
 // Car section
 var arrivals = make(chan *Car, 20)
-
 var staggerMax = 2
 var staggerMin = 1
 var carNum = 100
 
-//var waitArrival sync.WaitGroup
-
 // createCarsRoutine creates cars that arrive at the station
 func createCarsRoutine() {
-	//waitArrival.Add(1)
 	for i := 0; i < carNum; i++ {
-		arrivals <- &Car{ID: i, Fuel: genFuelType(), carSync: &sync.WaitGroup{}, QueueEnter: time.Now()}
+		arrivals <- &Car{ID: i, Fuel: genFuelType(), carSync: &sync.WaitGroup{}, StandQueueEnter: time.Now()}
 		stagger := time.Duration(rand.Intn(staggerMax-staggerMin) + staggerMin)
 		time.Sleep(stagger * time.Millisecond)
 	}
 	close(arrivals)
 }
 
-// findStand finds the best stand according to fuel type
+// findStandRoutine finds the best stand according to fuel type
 func findStandRoutine(stands []*FuelStand) {
 	for car := range arrivals {
 
@@ -209,8 +206,6 @@ func findStandRoutine(stands []*FuelStand) {
 	}
 }
 
-var buildingQueue = make(chan *sync.WaitGroup, 10)
-
 // findRegister finds the best cash register for a customer
 func findRegister(registers []*CashRegister) {
 
@@ -224,6 +219,7 @@ func findRegister(registers []*CashRegister) {
 				bestQueueLength = queueLength
 			}
 		}
+		car.RegisterQueueEnter = time.Now()
 		bestRegister.Queue <- car
 	}
 	for _, register := range registers {
@@ -232,7 +228,6 @@ func findRegister(registers []*CashRegister) {
 }
 
 // Fueling section
-
 // newFuelStand creates a stand for specific fuel type
 func newFuelStand(id int, fuel FuelType, bufferSize int) *FuelStand {
 	return &FuelStand{
@@ -248,19 +243,16 @@ func standRoutine(fs *FuelStand) {
 	standWaiter.Add(1)
 	fmt.Printf("Fuel stand %d is open\n", fs.Id)
 	for car := range fs.Queue {
-		car.QueueTime = time.Duration(time.Since(car.QueueEnter).Milliseconds())
+		car.StandQueueTime = time.Duration(time.Since(car.StandQueueEnter).Milliseconds())
 		doFueling(car)
 		car.carSync.Add(1)
-		payStart := time.Now()
-		buildingQueue <- car.carSync
+		buildingQueue <- car
 		car.carSync.Wait()
-		car.PayTime = time.Duration(time.Since(payStart).Milliseconds())
-		Exit <- car
 	}
 	fmt.Printf("Fuel stand %d is closed\n", fs.Id)
 }
 
-// fueling times
+// Fueling times
 var gasMinT = 1
 var gasMaxT = 4
 var dieselMinT = 2
@@ -286,12 +278,11 @@ func doFueling(car *Car) {
 }
 
 // Payment section
-
 // newCashRegister creates a new cash register
 func newCashRegister(id, bufferSize int) *CashRegister {
 	return &CashRegister{
 		Id:    id,
-		Queue: make(chan *sync.WaitGroup, bufferSize),
+		Queue: make(chan *Car, bufferSize),
 	}
 }
 
@@ -301,94 +292,139 @@ func registerRoutine(cs *CashRegister) {
 	registerWaiter.Add(1)
 	fmt.Printf("Cash register %d is open\n", cs.Id)
 	for car := range cs.Queue {
-		doPayment()
-		car.Done()
+		car.RegisterQueueTime = time.Duration(time.Since(car.RegisterQueueEnter).Milliseconds())
+		doPayment(car)
+		car.carSync.Done()
+		Exit <- car
 	}
 	fmt.Printf("Cash register %d is closed\n", cs.Id)
 }
 
-// payment times
+// Payment times
 var minPaymentT = 1
 var maxPaymentT = 7
 
 // doPayment does payment
-func doPayment() {
-	doSleeping(randomTime(minPaymentT, maxPaymentT))
+func doPayment(car *Car) {
+	car.PayTime = randomTime(minPaymentT, maxPaymentT)
+	doSleeping(car.PayTime)
 }
 
 var end sync.WaitGroup
 
 // Statistics section
+// aggregationRoutine collects global data about the station and prints them
 func aggregationRoutine() {
 	var totalCars int
 	var totalRegisterTime time.Duration
+	var totalRegisterQueue time.Duration
+	maxRegisterQueue := 0
+	// Gas
 	var totalGasTime time.Duration
+	var totalGasQueue time.Duration
 	maxGasQueue := 0
 	gasCount := 0
+	// Diesel
 	var totalDieselTime time.Duration
+	var totalDieselQueue time.Duration
 	maxDieselQueue := 0
 	dieselCount := 0
+	// LPG
 	var totalLPGTime time.Duration
+	var totalLPGQueue time.Duration
 	maxLPGQueue := 0
 	lpgCount := 0
+	// Electric
 	var totalElectricTime time.Duration
+	var totalElectricQueue time.Duration
 	maxElectricQueue := 0
 	electricCount := 0
 	for car := range Exit {
 		totalCars++
 		totalRegisterTime += car.PayTime
+		totalRegisterQueue += car.RegisterQueueTime
+		car.TotalTime = time.Duration(time.Since(car.StandQueueEnter).Milliseconds())
+		if int(car.RegisterQueueTime) > maxRegisterQueue {
+			maxRegisterQueue = int(car.RegisterQueueTime)
+		}
 		switch car.Fuel {
 		case Gas:
-			totalGasTime += car.FuelTime
+			totalGasTime += car.TotalTime
+			totalGasQueue += car.StandQueueTime
 			gasCount++
-			if car.QueueTime > 0 {
-				maxGasQueue = int(car.QueueTime)
+			if int(car.StandQueueTime) > maxGasQueue {
+				maxGasQueue = int(car.StandQueueTime)
 			}
 		case Diesel:
-			totalDieselTime += car.FuelTime
+			totalDieselTime += car.TotalTime
+			totalDieselQueue += car.StandQueueTime
 			dieselCount++
-			if car.QueueTime > 0 {
-				maxDieselQueue = int(car.QueueTime)
+			if int(car.StandQueueTime) > maxDieselQueue {
+				maxDieselQueue = int(car.StandQueueTime)
 			}
 		case LPG:
-			totalLPGTime += car.FuelTime
+			totalLPGTime += car.TotalTime
+			totalLPGQueue += car.StandQueueTime
 			lpgCount++
-			if car.QueueTime > 0 {
-				maxLPGQueue = int(car.QueueTime)
+			if int(car.StandQueueTime) > maxLPGQueue {
+				maxLPGQueue = int(car.StandQueueTime)
 			}
 		case Electric:
-			totalElectricTime += car.FuelTime
+			totalElectricTime += car.TotalTime
+			totalElectricQueue += car.StandQueueTime
 			electricCount++
-			if car.QueueTime > 0 {
-				maxElectricQueue = int(car.QueueTime)
+			if int(car.StandQueueTime) > maxElectricQueue {
+				maxElectricQueue = int(car.StandQueueTime)
 			}
 		}
-		//fmt.Printf("Car %s: \n Queue: %d \n Fuel: %d \n Pay: %d \n", car.Fuel, car.QueueTime, car.FuelTime, car.PayTime)
+		//fmt.Printf("Car %s: \n Queue: %d \n Fuel: %d \n Pay: %d \n", car.Fuel, car.StandQueueTime, car.FuelTime, car.PayTime)
 	}
-	averageGasTime := int(totalGasTime) / gasCount
-	averageDieselTime := int(totalDieselTime) / dieselCount
-	averageLPGTime := int(totalLPGTime) / lpgCount
-	averageElectricTime := int(totalElectricTime) / electricCount
-	fmt.Printf("gas:\n")
+	var averageGasQueue int
+	if gasCount != 0 {
+		averageGasQueue = int(totalGasQueue) / gasCount
+	}
+	var averageDieselQueue int
+	if dieselCount != 0 {
+		averageDieselQueue = int(totalDieselQueue) / dieselCount
+	}
+	var averageLPGQueue int
+	if lpgCount != 0 {
+		averageLPGQueue = int(totalLPGQueue) / lpgCount
+	}
+	var averageElectricQueue int
+	if electricCount != 0 {
+		averageElectricQueue = int(totalElectricQueue) / electricCount
+	}
+	var averageRegisterQueue int
+	if totalCars != 0 {
+		averageRegisterQueue = int(totalRegisterQueue) / totalCars
+	}
+	fmt.Println("Final statistics")
+	fmt.Printf("Gas:\n")
 	fmt.Printf("  total_cars: %d\n", gasCount)
 	fmt.Printf("  total_time: %dms\n", int(totalGasTime))
-	fmt.Printf("  avg_queue_time: %dms\n", int(averageGasTime))
-	fmt.Printf("  max_queue_time: %dms\n", maxGasQueue) // Since you're not calculating max queue time, I'm assuming it's a constant value.
-	fmt.Printf("diesel:\n")
+	fmt.Printf("  avg_queue_time: %dms\n", averageGasQueue)
+	fmt.Printf("  max_queue_time: %dms\n", maxGasQueue)
+	fmt.Printf("Diesel:\n")
 	fmt.Printf("  total_cars: %d\n", dieselCount)
 	fmt.Printf("  total_time: %dms\n", int(totalDieselTime))
-	fmt.Printf("  avg_queue_time: %dms\n", int(averageDieselTime))
+	fmt.Printf("  avg_queue_time: %dms\n", averageDieselQueue)
 	fmt.Printf("  max_queue_time: %dms\n", maxDieselQueue)
-	fmt.Printf("lpg:\n")
+	fmt.Printf("LPG:\n")
 	fmt.Printf("  total_cars: %d\n", lpgCount)
 	fmt.Printf("  total_time: %dms\n", int(totalLPGTime))
-	fmt.Printf("  avg_queue_time: %dms\n", int(averageLPGTime))
+	fmt.Printf("  avg_queue_time: %dms\n", averageLPGQueue)
 	fmt.Printf("  max_queue_time: %dms\n", maxLPGQueue)
-	fmt.Printf("electric:\n")
+	fmt.Printf("Electric:\n")
 	fmt.Printf("  total_cars: %d\n", electricCount)
 	fmt.Printf("  total_time: %dms\n", int(totalElectricTime))
-	fmt.Printf("  avg_queue_time: %dms\n", int(averageElectricTime))
+	fmt.Printf("  avg_queue_time: %dms\n", averageElectricQueue)
 	fmt.Printf("  max_queue_time: %dms\n", maxElectricQueue)
+	fmt.Printf("Registers:\n")
+	fmt.Printf("  total_cars: %d\n", totalCars)
+	fmt.Printf("  total_time: %dms\n", int(totalRegisterTime))
+	fmt.Printf("  avg_queue_time: %dms\n", averageRegisterQueue)
+	fmt.Printf("  max_queue_time: %dms\n", maxRegisterQueue)
 
 	end.Done()
 }
