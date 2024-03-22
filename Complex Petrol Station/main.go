@@ -3,51 +3,23 @@ package main
 import (
 	"fmt"
 	"github.com/joho/godotenv"
+	"goenv/Services"
 	"log"
-	"math/rand"
 	"os"
 	"strconv"
 	"sync"
 	"time"
 )
 
-type FuelType string
+// Variables
 
-// Constants for fuel types
-const (
-	Gas      = "gas"
-	Diesel   = "diesel"
-	LPG      = "LPG"
-	Electric = "electric"
-)
+// Synchronization
 
-// Car represents a car arriving at the gas station
-type Car struct {
-	ID                 int
-	Fuel               FuelType
-	StandQueueEnter    time.Time
-	RegisterQueueEnter time.Time
-	StandQueueTime     time.Duration
-	RegisterQueueTime  time.Duration
-	FuelTime           time.Duration
-	PayTime            time.Duration
-	TotalTime          time.Duration
-	carSync            *sync.WaitGroup
-}
+var end sync.WaitGroup
 
-// FuelStand describes a specific stand at the station
-type FuelStand struct {
-	Id    int
-	Type  FuelType
-	Queue chan *Car
-}
+// Initializations
 
-// CashRegister represents a cash register for payment
-type CashRegister struct {
-	Id    int
-	Queue chan *Car
-}
-
+// loadEnvFile configures simulation according to setup.env
 func loadEnvFile() {
 	err := godotenv.Load("setup.env")
 
@@ -56,33 +28,34 @@ func loadEnvFile() {
 	}
 
 	// car creation
-	staggerMin = loadIntEnvVariable("ARRIVAL_MIN")
-	staggerMax = loadIntEnvVariable("ARRIVAL_MAX")
-	carNum = loadIntEnvVariable("CAR_COUNT")
+	Services.StaggerMin = loadIntEnvVariable("ARRIVAL_MIN")
+	Services.StaggerMax = loadIntEnvVariable("ARRIVAL_MAX")
+	Services.CarNum = loadIntEnvVariable("CAR_COUNT")
 	// gas
-	numGas = loadIntEnvVariable("GAS_COUNT")
-	gasMinT = loadIntEnvVariable("GAS_SERVE_TIME_MIN")
-	gasMaxT = loadIntEnvVariable("GAS_SERVE_TIME_MAX")
+	Services.NumGas = loadIntEnvVariable("GAS_COUNT")
+	Services.GasMinT = loadIntEnvVariable("GAS_SERVE_TIME_MIN")
+	Services.GasMaxT = loadIntEnvVariable("GAS_SERVE_TIME_MAX")
 	// diesel
-	numDiesel = loadIntEnvVariable("DIESEL_COUNT")
-	dieselMinT = loadIntEnvVariable("DIESEL_SERVE_TIME_MIN")
-	dieselMaxT = loadIntEnvVariable("DIESEL_SERVE_TIME_MAX")
+	Services.NumDiesel = loadIntEnvVariable("DIESEL_COUNT")
+	Services.DieselMinT = loadIntEnvVariable("DIESEL_SERVE_TIME_MIN")
+	Services.DieselMaxT = loadIntEnvVariable("DIESEL_SERVE_TIME_MAX")
 	// lpg
-	numLPG = loadIntEnvVariable("LPG_COUNT")
-	lpgMinT = loadIntEnvVariable("LPG_SERVE_TIME_MIN")
-	lpgMaxT = loadIntEnvVariable("LPG_SERVE_TIME_MAX")
+	Services.NumLPG = loadIntEnvVariable("LPG_COUNT")
+	Services.LpgMinT = loadIntEnvVariable("LPG_SERVE_TIME_MIN")
+	Services.LpgMaxT = loadIntEnvVariable("LPG_SERVE_TIME_MAX")
 	// electric
-	numElectric = loadIntEnvVariable("ELECTRIC_COUNT")
-	electricMinT = loadIntEnvVariable("ELECTRIC_SERVE_TIME_MIN")
-	electricMaxT = loadIntEnvVariable("ELECTRIC_SERVE_TIME_MAX")
+	Services.NumElectric = loadIntEnvVariable("ELECTRIC_COUNT")
+	Services.ElectricMinT = loadIntEnvVariable("ELECTRIC_SERVE_TIME_MIN")
+	Services.ElectricMaxT = loadIntEnvVariable("ELECTRIC_SERVE_TIME_MAX")
 	// registers
-	numRegisters = loadIntEnvVariable("REGISTER_COUNT")
-	minPaymentT = loadIntEnvVariable("REGISTER_HANDLE_TIME_MIN")
-	maxPaymentT = loadIntEnvVariable("REGISTER_HANDLE_TIME_MAX")
-	standBuffer = loadIntEnvVariable("STAND_BUFFER")
-	registerBuffer = loadIntEnvVariable("REGISTER_BUFFER")
+	Services.NumRegisters = loadIntEnvVariable("REGISTER_COUNT")
+	Services.MinPaymentT = loadIntEnvVariable("REGISTER_HANDLE_TIME_MIN")
+	Services.MaxPaymentT = loadIntEnvVariable("REGISTER_HANDLE_TIME_MAX")
+	Services.StandBuffer = loadIntEnvVariable("STAND_BUFFER")
+	Services.RegisterBuffer = loadIntEnvVariable("REGISTER_BUFFER")
 }
 
+// loadIntEnvVariable loads variables from .env file as an integer
 func loadIntEnvVariable(key string) int {
 	number, err := strconv.Atoi(os.Getenv(key))
 	if err != nil {
@@ -91,228 +64,67 @@ func loadIntEnvVariable(key string) int {
 	return number
 }
 
-// stand setups
-var standWaiter sync.WaitGroup
-var standBuffer = 2
-var registerWaiter sync.WaitGroup
-var registerBuffer = 3
+// Routines
 
-// stand numbers
-var numGas = 2
-var numDiesel = 2
-var numLPG = 1
-var numElectric = 1
-
-// register numbers
-var numRegisters = 2
-
-// channels
-var buildingQueue = make(chan *Car, 10)
-var Exit = make(chan *Car)
-
+// main controls the whole simulation
 func main() {
 	loadEnvFile()
 	// Creating fuel stands
-	var stands []*FuelStand
+	var stands []*Services.FuelStand
 	standCount := 0
-	// adding gas stands
-	for i := 0; i < numGas; i++ {
-		stands = append(stands, newFuelStand(standCount, Gas, standBuffer))
+	// Adding gas stands
+	for i := 0; i < Services.NumGas; i++ {
+		stands = append(stands, Services.NewFuelStand(standCount, Services.Gas, Services.StandBuffer))
 		standCount++
 	}
-	// adding diesel stands
-	for i := 0; i < numDiesel; i++ {
-		stands = append(stands, newFuelStand(standCount, Diesel, standBuffer))
+	// Adding diesel stands
+	for i := 0; i < Services.NumDiesel; i++ {
+		stands = append(stands, Services.NewFuelStand(standCount, Services.Diesel, Services.StandBuffer))
 		standCount++
 	}
-	// adding lpg stands
-	for i := 0; i < numLPG; i++ {
-		stands = append(stands, newFuelStand(standCount, LPG, standBuffer))
+	// Adding lpg stands
+	for i := 0; i < Services.NumLPG; i++ {
+		stands = append(stands, Services.NewFuelStand(standCount, Services.LPG, Services.StandBuffer))
 		standCount++
 	}
-	// adding electric stands
-	for i := 0; i < numElectric; i++ {
-		stands = append(stands, newFuelStand(standCount, Electric, standBuffer))
+	// Adding electric stands
+	for i := 0; i < Services.NumElectric; i++ {
+		stands = append(stands, Services.NewFuelStand(standCount, Services.Electric, Services.StandBuffer))
 		standCount++
 	}
 	// Creating registers
-	var registers []*CashRegister
-	for i := 0; i < numRegisters; i++ {
-		registers = append(registers, newCashRegister(i, registerBuffer))
+	var registers []*Services.CashRegister
+	for i := 0; i < Services.NumRegisters; i++ {
+		registers = append(registers, Services.NewCashRegister(i, Services.RegisterBuffer))
 	}
 	end.Add(1)
 	// Car creation routine
-	go createCarsRoutine()
+	go Services.CreateCarsRoutine()
 	// Stand routines
 	for _, stand := range stands {
-		go standRoutine(stand)
+		go Services.StandRoutine(stand)
 	}
 	// CashRegister routines
 	for _, register := range registers {
-		go registerRoutine(register)
+		go Services.RegisterRoutine(register)
 	}
 	// Car shuffling routine
-	go findStandRoutine(stands)
+	go Services.FindStandRoutine(stands)
 	// Register shuffling routine
-	go findRegister(registers)
+	go Services.FindRegister(registers)
 	// Aggregation routine
 	go aggregationRoutine()
 
-	standWaiter.Wait()
-	close(buildingQueue)
+	// End synchronizations
+	Services.StandWaiter.Wait()
+	close(Services.BuildingQueue)
 
-	registerWaiter.Wait()
-	close(Exit)
+	Services.RegisterWaiter.Wait()
+	close(Services.Exit)
 
 	end.Wait()
 }
 
-// Car section
-var arrivals = make(chan *Car, 20)
-var staggerMax = 2
-var staggerMin = 1
-var carNum = 100
-
-// createCarsRoutine creates cars that arrive at the station
-func createCarsRoutine() {
-	for i := 0; i < carNum; i++ {
-		arrivals <- &Car{ID: i, Fuel: genFuelType(), carSync: &sync.WaitGroup{}, StandQueueEnter: time.Now()}
-		stagger := time.Duration(rand.Intn(staggerMax-staggerMin) + staggerMin)
-		time.Sleep(stagger * time.Millisecond)
-	}
-	close(arrivals)
-}
-
-// findStandRoutine finds the best stand according to fuel type
-func findStandRoutine(stands []*FuelStand) {
-	for car := range arrivals {
-
-		var bestStand *FuelStand
-		bestQueueLength := -1
-
-		for _, stand := range stands {
-			if stand.Type == car.Fuel {
-				queueLength := len(stand.Queue)
-				if bestQueueLength == -1 || queueLength < bestQueueLength {
-					bestStand = stand
-					bestQueueLength = queueLength
-				}
-			}
-		}
-		bestStand.Queue <- car
-	}
-	for _, stand := range stands {
-		close(stand.Queue)
-	}
-}
-
-// findRegister finds the best cash register for a customer
-func findRegister(registers []*CashRegister) {
-
-	for car := range buildingQueue {
-		var bestRegister *CashRegister
-		bestQueueLength := -1
-		for _, register := range registers {
-			queueLength := len(register.Queue)
-			if bestQueueLength == -1 || queueLength < bestQueueLength {
-				bestRegister = register
-				bestQueueLength = queueLength
-			}
-		}
-		car.RegisterQueueEnter = time.Now()
-		bestRegister.Queue <- car
-	}
-	for _, register := range registers {
-		close(register.Queue)
-	}
-}
-
-// Fueling section
-// newFuelStand creates a stand for specific fuel type
-func newFuelStand(id int, fuel FuelType, bufferSize int) *FuelStand {
-	return &FuelStand{
-		Id:    id,
-		Type:  fuel,
-		Queue: make(chan *Car, bufferSize),
-	}
-}
-
-// standRoutine runs a routine for serving cars at a stand
-func standRoutine(fs *FuelStand) {
-	defer standWaiter.Done()
-	standWaiter.Add(1)
-	fmt.Printf("Fuel stand %d is open\n", fs.Id)
-	for car := range fs.Queue {
-		car.StandQueueTime = time.Duration(time.Since(car.StandQueueEnter).Milliseconds())
-		doFueling(car)
-		car.carSync.Add(1)
-		buildingQueue <- car
-		car.carSync.Wait()
-	}
-	fmt.Printf("Fuel stand %d is closed\n", fs.Id)
-}
-
-// Fueling times
-var gasMinT = 1
-var gasMaxT = 4
-var dieselMinT = 2
-var dieselMaxT = 5
-var lpgMinT = 5
-var lpgMaxT = 12
-var electricMinT = 10
-var electricMaxT = 21
-
-// doFueling does fueling
-func doFueling(car *Car) {
-	switch car.Fuel {
-	case Gas:
-		car.FuelTime = randomTime(gasMinT, gasMaxT)
-	case Diesel:
-		car.FuelTime = randomTime(dieselMinT, dieselMaxT)
-	case LPG:
-		car.FuelTime = randomTime(lpgMinT, lpgMaxT)
-	case Electric:
-		car.FuelTime = randomTime(electricMinT, electricMaxT)
-	}
-	doSleeping(car.FuelTime)
-}
-
-// Payment section
-// newCashRegister creates a new cash register
-func newCashRegister(id, bufferSize int) *CashRegister {
-	return &CashRegister{
-		Id:    id,
-		Queue: make(chan *Car, bufferSize),
-	}
-}
-
-// registerRoutine runs a routine for serving cars at a register
-func registerRoutine(cs *CashRegister) {
-	defer registerWaiter.Done()
-	registerWaiter.Add(1)
-	fmt.Printf("Cash register %d is open\n", cs.Id)
-	for car := range cs.Queue {
-		car.RegisterQueueTime = time.Duration(time.Since(car.RegisterQueueEnter).Milliseconds())
-		doPayment(car)
-		car.carSync.Done()
-		Exit <- car
-	}
-	fmt.Printf("Cash register %d is closed\n", cs.Id)
-}
-
-// Payment times
-var minPaymentT = 1
-var maxPaymentT = 7
-
-// doPayment does payment
-func doPayment(car *Car) {
-	car.PayTime = randomTime(minPaymentT, maxPaymentT)
-	doSleeping(car.PayTime)
-}
-
-var end sync.WaitGroup
-
-// Statistics section
 // aggregationRoutine collects global data about the station and prints them
 func aggregationRoutine() {
 	var totalCars int
@@ -339,7 +151,8 @@ func aggregationRoutine() {
 	var totalElectricQueue time.Duration
 	maxElectricQueue := 0
 	electricCount := 0
-	for car := range Exit {
+	// Exit queue aggregates data
+	for car := range Services.Exit {
 		totalCars++
 		totalRegisterTime += car.PayTime
 		totalRegisterQueue += car.RegisterQueueTime
@@ -348,28 +161,28 @@ func aggregationRoutine() {
 			maxRegisterQueue = int(car.RegisterQueueTime)
 		}
 		switch car.Fuel {
-		case Gas:
+		case Services.Gas:
 			totalGasTime += car.TotalTime
 			totalGasQueue += car.StandQueueTime
 			gasCount++
 			if int(car.StandQueueTime) > maxGasQueue {
 				maxGasQueue = int(car.StandQueueTime)
 			}
-		case Diesel:
+		case Services.Diesel:
 			totalDieselTime += car.TotalTime
 			totalDieselQueue += car.StandQueueTime
 			dieselCount++
 			if int(car.StandQueueTime) > maxDieselQueue {
 				maxDieselQueue = int(car.StandQueueTime)
 			}
-		case LPG:
+		case Services.LPG:
 			totalLPGTime += car.TotalTime
 			totalLPGQueue += car.StandQueueTime
 			lpgCount++
 			if int(car.StandQueueTime) > maxLPGQueue {
 				maxLPGQueue = int(car.StandQueueTime)
 			}
-		case Electric:
+		case Services.Electric:
 			totalElectricTime += car.TotalTime
 			totalElectricQueue += car.StandQueueTime
 			electricCount++
@@ -379,6 +192,7 @@ func aggregationRoutine() {
 		}
 		//fmt.Printf("Car %s: \n Queue: %d \n Fuel: %d \n Pay: %d \n", car.Fuel, car.StandQueueTime, car.FuelTime, car.PayTime)
 	}
+	// Calculating average values
 	var averageGasQueue int
 	if gasCount != 0 {
 		averageGasQueue = int(totalGasQueue) / gasCount
@@ -399,6 +213,7 @@ func aggregationRoutine() {
 	if totalCars != 0 {
 		averageRegisterQueue = int(totalRegisterQueue) / totalCars
 	}
+	// Printing results
 	fmt.Println("Final statistics")
 	fmt.Printf("Gas:\n")
 	fmt.Printf("  total_cars: %d\n", gasCount)
@@ -427,24 +242,4 @@ func aggregationRoutine() {
 	fmt.Printf("  max_queue_time: %dms\n", maxRegisterQueue)
 
 	end.Done()
-}
-
-// Utility functions
-
-// genFuelType returns a random fuel type.
-func genFuelType() FuelType {
-	fuelTypes := []FuelType{Gas, Diesel, Electric, LPG}
-	randomIndex := rand.Intn(len(fuelTypes))
-	return fuelTypes[randomIndex]
-}
-
-// randomTime generates a random time between min and max
-func randomTime(min, max int) time.Duration {
-	generatedTime := time.Duration(rand.Intn(max-min) + min)
-	return generatedTime
-}
-
-// doSleeping sleeps for delay * milliseconds
-func doSleeping(delay time.Duration) {
-	time.Sleep(delay * time.Millisecond)
 }
