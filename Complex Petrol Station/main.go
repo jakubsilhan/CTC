@@ -2,11 +2,10 @@ package main
 
 import (
 	"fmt"
-	"github.com/joho/godotenv"
 	"goenv/Services"
+	"gopkg.in/yaml.v2"
 	"log"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -19,56 +18,83 @@ var end sync.WaitGroup
 
 // Initializations
 
-// loadEnvFile configures simulation according to setup.env
-func loadEnvFile() {
-	err := godotenv.Load("setup.env")
-
-	if err != nil {
-		log.Fatalf("Error loading setup.env file")
-	}
-
-	// car creation
-	Services.StaggerMin = loadIntEnvVariable("ARRIVAL_MIN")
-	Services.StaggerMax = loadIntEnvVariable("ARRIVAL_MAX")
-	Services.CarNum = loadIntEnvVariable("CAR_COUNT")
-	// gas
-	Services.NumGas = loadIntEnvVariable("GAS_COUNT")
-	Services.GasMinT = loadIntEnvVariable("GAS_SERVE_TIME_MIN")
-	Services.GasMaxT = loadIntEnvVariable("GAS_SERVE_TIME_MAX")
-	// diesel
-	Services.NumDiesel = loadIntEnvVariable("DIESEL_COUNT")
-	Services.DieselMinT = loadIntEnvVariable("DIESEL_SERVE_TIME_MIN")
-	Services.DieselMaxT = loadIntEnvVariable("DIESEL_SERVE_TIME_MAX")
-	// lpg
-	Services.NumLPG = loadIntEnvVariable("LPG_COUNT")
-	Services.LpgMinT = loadIntEnvVariable("LPG_SERVE_TIME_MIN")
-	Services.LpgMaxT = loadIntEnvVariable("LPG_SERVE_TIME_MAX")
-	// electric
-	Services.NumElectric = loadIntEnvVariable("ELECTRIC_COUNT")
-	Services.ElectricMinT = loadIntEnvVariable("ELECTRIC_SERVE_TIME_MIN")
-	Services.ElectricMaxT = loadIntEnvVariable("ELECTRIC_SERVE_TIME_MAX")
-	// registers
-	Services.NumRegisters = loadIntEnvVariable("REGISTER_COUNT")
-	Services.MinPaymentT = loadIntEnvVariable("REGISTER_HANDLE_TIME_MIN")
-	Services.MaxPaymentT = loadIntEnvVariable("REGISTER_HANDLE_TIME_MAX")
-	Services.StandBuffer = loadIntEnvVariable("STAND_BUFFER")
-	Services.RegisterBuffer = loadIntEnvVariable("REGISTER_BUFFER")
+// Config is a struct for program configuration
+type Config struct {
+	Cars struct {
+		Count          int `yaml:"count"`
+		ArrivalTimeMin int `yaml:"arrival_time_min"`
+		ArrivalTimeMax int `yaml:"arrival_time_max"`
+	} `yaml:"cars"`
+	Stations struct {
+		Gas struct {
+			Count        int `yaml:"count"`
+			ServeTimeMin int `yaml:"serve_time_min"`
+			ServeTimeMax int `yaml:"serve_time_max"`
+		} `yaml:"gas"`
+		Diesel struct {
+			Count        int `yaml:"count"`
+			ServeTimeMin int `yaml:"serve_time_min"`
+			ServeTimeMax int `yaml:"serve_time_max"`
+		} `yaml:"diesel"`
+		Lpg struct {
+			Count        int `yaml:"count"`
+			ServeTimeMin int `yaml:"serve_time_min"`
+			ServeTimeMax int `yaml:"serve_time_max"`
+		} `yaml:"lpg"`
+		Electric struct {
+			Count        int `yaml:"count"`
+			ServeTimeMin int `yaml:"serve_time_min"`
+			ServeTimeMax int `yaml:"serve_time_max"`
+		} `yaml:"electric"`
+	} `yaml:"stations"`
+	Registers struct {
+		Count         int `yaml:"count"`
+		HandleTimeMin int `yaml:"handle_time_min"`
+		HandleTimeMax int `yaml:"handle_time_max"`
+	} `yaml:"registers"`
 }
 
-// loadIntEnvVariable loads variables from .env file as an integer
-func loadIntEnvVariable(key string) int {
-	number, err := strconv.Atoi(os.Getenv(key))
+// loadConfigFile loads configuration from yaml into set variables
+func loadConfigFile() {
+	file, err := os.ReadFile("config.yaml")
 	if err != nil {
-		log.Fatalf("Error loading environment variable: " + key)
+		log.Fatalf("Error reading config.yaml file: %v", err)
 	}
-	return number
+
+	var config Config
+	err = yaml.Unmarshal(file, &config)
+	if err != nil {
+		log.Fatalf("Error unmarshalling config.yaml file: %v", err)
+	}
+
+	// Loads the configuration into existing variables
+	Services.StaggerMin = config.Cars.ArrivalTimeMin
+	Services.StaggerMax = config.Cars.ArrivalTimeMax
+	Services.CarNum = config.Cars.Count
+	Services.NumGas = config.Stations.Gas.Count
+	Services.GasMinT = config.Stations.Gas.ServeTimeMin
+	Services.GasMaxT = config.Stations.Gas.ServeTimeMax
+	Services.NumDiesel = config.Stations.Diesel.Count
+	Services.DieselMinT = config.Stations.Diesel.ServeTimeMin
+	Services.DieselMaxT = config.Stations.Diesel.ServeTimeMax
+	Services.NumLPG = config.Stations.Lpg.Count
+	Services.LpgMinT = config.Stations.Lpg.ServeTimeMin
+	Services.LpgMaxT = config.Stations.Lpg.ServeTimeMax
+	Services.NumElectric = config.Stations.Electric.Count
+	Services.ElectricMinT = config.Stations.Electric.ServeTimeMin
+	Services.ElectricMaxT = config.Stations.Electric.ServeTimeMax
+	Services.NumRegisters = config.Registers.Count
+	Services.MinPaymentT = config.Registers.HandleTimeMin
+	Services.MaxPaymentT = config.Registers.HandleTimeMax
 }
 
 // Routines
 
 // main controls the whole simulation
 func main() {
-	loadEnvFile()
+	loadConfigFile()
+	//totalStandCount := Services.NumGas + Services.NumDiesel + Services.NumLPG + Services.NumElectric
+	//Services.StandCreationWaiter.Add(totalStandCount)
 	// Creating fuel stands
 	var stands []*Services.FuelStand
 	standCount := 0
@@ -101,9 +127,11 @@ func main() {
 	// Car creation routine
 	go Services.CreateCarsRoutine()
 	// Stand routines
+	Services.StandCreationWaiter.Add(standCount)
 	for _, stand := range stands {
 		go Services.StandRoutine(stand)
 	}
+	Services.StandCreationWaiter.Wait()
 	// CashRegister routines
 	for _, register := range registers {
 		go Services.RegisterRoutine(register)
@@ -116,13 +144,31 @@ func main() {
 	go aggregationRoutine()
 
 	// End synchronizations
-	Services.StandWaiter.Wait()
+	Services.StandFinishWaiter.Wait()
+	//Services.StandFinishWaiter.Wait()
 	close(Services.BuildingQueue)
 
 	Services.RegisterWaiter.Wait()
 	close(Services.Exit)
 
 	end.Wait()
+}
+
+// StationStats is a struct for output yaml construction
+type StationStats struct {
+	TotalCars    int `yaml:"total_cars"`
+	TotalTime    int `yaml:"total_time"`
+	AvgQueueTime int `yaml:"avg_queue_time"`
+	MaxQueueTime int `yaml:"max_queue_time"`
+}
+
+// FinalStats is a struct for output yaml construction
+type FinalStats struct {
+	Gas       StationStats `yaml:"Gas"`
+	Diesel    StationStats `yaml:"Diesel"`
+	LPG       StationStats `yaml:"LPG"`
+	Electric  StationStats `yaml:"Electric"`
+	Registers StationStats `yaml:"Registers"`
 }
 
 // aggregationRoutine collects global data about the station and prints them
@@ -162,28 +208,32 @@ func aggregationRoutine() {
 		}
 		switch car.Fuel {
 		case Services.Gas:
-			totalGasTime += car.TotalTime
+			//totalGasTime += car.TotalTime
+			totalGasTime += car.FuelTime
 			totalGasQueue += car.StandQueueTime
 			gasCount++
 			if int(car.StandQueueTime) > maxGasQueue {
 				maxGasQueue = int(car.StandQueueTime)
 			}
 		case Services.Diesel:
-			totalDieselTime += car.TotalTime
+			//totalDieselTime += car.TotalTime
+			totalDieselTime += car.FuelTime
 			totalDieselQueue += car.StandQueueTime
 			dieselCount++
 			if int(car.StandQueueTime) > maxDieselQueue {
 				maxDieselQueue = int(car.StandQueueTime)
 			}
 		case Services.LPG:
-			totalLPGTime += car.TotalTime
+			//totalLPGTime += car.TotalTime
+			totalLPGTime += car.FuelTime
 			totalLPGQueue += car.StandQueueTime
 			lpgCount++
 			if int(car.StandQueueTime) > maxLPGQueue {
 				maxLPGQueue = int(car.StandQueueTime)
 			}
 		case Services.Electric:
-			totalElectricTime += car.TotalTime
+			//totalElectricTime += car.TotalTime
+			totalElectricTime += car.FuelTime
 			totalElectricQueue += car.StandQueueTime
 			electricCount++
 			if int(car.StandQueueTime) > maxElectricQueue {
@@ -213,33 +263,50 @@ func aggregationRoutine() {
 	if totalCars != 0 {
 		averageRegisterQueue = int(totalRegisterQueue) / totalCars
 	}
-	// Printing results
-	fmt.Println("Final statistics")
-	fmt.Printf("Gas:\n")
-	fmt.Printf("  total_cars: %d\n", gasCount)
-	fmt.Printf("  total_time: %dms\n", int(totalGasTime))
-	fmt.Printf("  avg_queue_time: %dms\n", averageGasQueue)
-	fmt.Printf("  max_queue_time: %dms\n", maxGasQueue)
-	fmt.Printf("Diesel:\n")
-	fmt.Printf("  total_cars: %d\n", dieselCount)
-	fmt.Printf("  total_time: %dms\n", int(totalDieselTime))
-	fmt.Printf("  avg_queue_time: %dms\n", averageDieselQueue)
-	fmt.Printf("  max_queue_time: %dms\n", maxDieselQueue)
-	fmt.Printf("LPG:\n")
-	fmt.Printf("  total_cars: %d\n", lpgCount)
-	fmt.Printf("  total_time: %dms\n", int(totalLPGTime))
-	fmt.Printf("  avg_queue_time: %dms\n", averageLPGQueue)
-	fmt.Printf("  max_queue_time: %dms\n", maxLPGQueue)
-	fmt.Printf("Electric:\n")
-	fmt.Printf("  total_cars: %d\n", electricCount)
-	fmt.Printf("  total_time: %dms\n", int(totalElectricTime))
-	fmt.Printf("  avg_queue_time: %dms\n", averageElectricQueue)
-	fmt.Printf("  max_queue_time: %dms\n", maxElectricQueue)
-	fmt.Printf("Registers:\n")
-	fmt.Printf("  total_cars: %d\n", totalCars)
-	fmt.Printf("  total_time: %dms\n", int(totalRegisterTime))
-	fmt.Printf("  avg_queue_time: %dms\n", averageRegisterQueue)
-	fmt.Printf("  max_queue_time: %dms\n", maxRegisterQueue)
+	// Creating final yaml
+	stats := FinalStats{
+		Gas: StationStats{
+			TotalCars:    gasCount,          // number of cars that went through this stand
+			TotalTime:    int(totalGasTime), // the total time cars spent fueling on the station for this stand
+			AvgQueueTime: averageGasQueue,   // average time spent in a queue for this stand
+			MaxQueueTime: maxGasQueue,       // max time spent in a queue for this stand
+		},
+		Diesel: StationStats{
+			TotalCars:    dieselCount,
+			TotalTime:    int(totalDieselTime),
+			AvgQueueTime: averageDieselQueue,
+			MaxQueueTime: maxDieselQueue,
+		},
+		LPG: StationStats{
+			TotalCars:    lpgCount,
+			TotalTime:    int(totalLPGTime),
+			AvgQueueTime: averageLPGQueue,
+			MaxQueueTime: maxLPGQueue,
+		},
+		Electric: StationStats{
+			TotalCars:    electricCount,
+			TotalTime:    int(totalElectricTime),
+			AvgQueueTime: averageElectricQueue,
+			MaxQueueTime: maxElectricQueue,
+		},
+		Registers: StationStats{
+			TotalCars:    totalCars,              // number of cars that went through payment
+			TotalTime:    int(totalRegisterTime), // total time spent at the register
+			AvgQueueTime: averageRegisterQueue,   // average time spent in the queues for the registers
+			MaxQueueTime: maxRegisterQueue,       // max time spent in the queues for the registers
+		},
+	}
+	yamlStats, err := yaml.Marshal(&stats)
+	if err != nil {
+		log.Fatalf("Error marshalling stats to YAML: %v", err)
+	}
+
+	err = os.WriteFile("final_stats.yaml", yamlStats, 0777)
+	if err != nil {
+		log.Fatalf("Error writing YAML to file: %v", err)
+	}
+
+	fmt.Printf("Final statistics:\n%s\n", string(yamlStats))
 
 	end.Done()
 }

@@ -1,0 +1,25 @@
+cars:
+  count: 200
+  arrival_time_min: 1   # new car arrives every 1-2ms
+  arrival_time_max: 2
+stations:
+  gas:
+    count: 2
+    serve_time_min: 2
+    serve_time_max: 5
+  diesel:
+    count: 2
+    serve_time_min: 3
+    serve_time_max: 6
+  lpg:
+    count: 1
+    serve_time_min: 4
+    serve_time_max: 7
+  electric:
+    count: 1
+    serve_time_min: 5
+    serve_time_max: 10
+registers:
+  count: 2
+  handle_time_min: 1
+  handle_time_max: 3

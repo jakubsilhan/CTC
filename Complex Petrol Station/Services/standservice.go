@@ -21,7 +21,8 @@ var ElectricMaxT = 21
 
 // Stand setups
 
-var StandWaiter sync.WaitGroup
+var StandFinishWaiter sync.WaitGroup
+var StandCreationWaiter sync.WaitGroup
 var StandBuffer = 2
 
 // Stand numbers
@@ -78,9 +79,10 @@ func FindStandRoutine(stands []*FuelStand) {
 
 // StandRoutine runs a routine for serving cars at a stand
 func StandRoutine(fs *FuelStand) {
-	defer StandWaiter.Done()
-	StandWaiter.Add(1)
+	defer StandFinishWaiter.Done()
+	StandFinishWaiter.Add(1)
 	fmt.Printf("Fuel stand %d is open\n", fs.Id)
+	StandCreationWaiter.Done()
 	// Stand queue
 	for car := range fs.Queue {
 		car.StandQueueTime = time.Duration(time.Since(car.StandQueueEnter).Milliseconds())
